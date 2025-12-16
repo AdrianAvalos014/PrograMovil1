@@ -21,10 +21,7 @@ import { signInWithEmailAndPassword } from "firebase/auth";
 
 // Offline-first
 import NetInfo from "@react-native-community/netinfo";
-import {
-  loadUsers,
-  saveSession,
-} from "../../config/localStorageConfig";
+import { loadUsers, saveSession } from "../../config/localStorageConfig";
 
 const loginImage = require("../../../assets/login_image.png");
 
@@ -43,7 +40,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ navigation }) => {
   const [isLoading, setIsLoading] = useState(false);
 
   // ============================================================
-  // 🔐 LOGIN OFFLINE-FIRST
+  // 🔐 LOGIN OFFLINE-FIRST (CORREGIDO)
   // ============================================================
   const handleLogin = async () => {
     const emailNorm = email.trim().toLowerCase();
@@ -62,7 +59,25 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ navigation }) => {
     try {
       setIsLoading(true);
 
-      // 1️⃣ Buscar usuario LOCAL
+      const net = await NetInfo.fetch();
+
+      // =================================================
+      // 1️⃣ SI HAY INTERNET → FIREBASE MANDA
+      // =================================================
+      if (net.isConnected && net.isInternetReachable) {
+        try {
+          await signInWithEmailAndPassword(auth, emailNorm, passNorm);
+          navigation.replace("Home");
+          return;
+        } catch (e) {
+          Alert.alert("Error", "Credenciales incorrectas.");
+          return;
+        }
+      }
+
+      // =================================================
+      // 2️⃣ SIN INTERNET → LOGIN LOCAL
+      // =================================================
       const users = await loadUsers();
       const localUser = users.find(
         (u) => u.email === emailNorm && u.password === passNorm && !u.deleted
@@ -73,19 +88,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ navigation }) => {
         return;
       }
 
-      // 2️⃣ Guardar sesión local
       await saveSession(localUser);
-
-      // 3️⃣ Si hay internet, intentamos Firebase (no bloquea)
-      const net = await NetInfo.fetch();
-      if (net.isConnected && net.isInternetReachable) {
-        try {
-          await signInWithEmailAndPassword(auth, emailNorm, passNorm);
-        } catch {
-          // Firebase puede fallar, pero el login local manda
-        }
-      }
-
       navigation.replace("Home");
     } catch (e) {
       console.log("[login] error:", e);
