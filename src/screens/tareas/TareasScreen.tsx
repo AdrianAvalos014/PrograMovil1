@@ -1,7 +1,885 @@
-// src/screens/tareas/TareasScreen.tsx
-// FASE 2 + Offline local (AsyncStorage) + Firestore en tiempo real
-// Ajustado para que el modal se cierre aunque no haya conexión.
+// // src/screens/tareas/TareasScreen.tsx
+// // FASE 2 + Offline local (AsyncStorage) + Firestore en tiempo real
+// // Ajustado para que el modal se cierre aunque no haya conexión.
 
+// import React, { useEffect, useMemo, useState } from "react";
+// import {
+//   View,
+//   Text,
+//   StyleSheet,
+//   TouchableOpacity,
+//   SafeAreaView,
+//   StatusBar,
+//   FlatList,
+//   TextInput,
+//   Modal,
+//   KeyboardAvoidingView,
+//   Platform,
+//   ScrollView,
+//   Alert,
+// } from "react-native";
+// import { FontAwesome5, MaterialIcons } from "@expo/vector-icons";
+// import { FONT_SIZES } from "../../../types";
+
+// // 🔐 Firebase
+// import { auth, db } from "../../services/firebase-config";
+// import {
+//   collection,
+//   onSnapshot,
+//   doc,
+//   setDoc,
+//   deleteDoc,
+//   getDocs,
+// } from "firebase/firestore";
+
+// // 🔹 Storage local
+// import {
+//   loadTasks,
+//   saveTasks,
+//   type StoredTask,
+//   type Prioridad,
+// } from "../../config/localStorageConfig";
+
+// interface Tarea extends StoredTask {}
+// type Filtro = "Todas" | "Pendientes" | "Completadas";
+
+// const PRIORIDADES: Prioridad[] = ["Baja", "Media", "Alta"];
+
+// const TareasScreen: React.FC = () => {
+//   // ===== Usuario actual =====
+//   const [userId, setUserId] = useState<string | null>(
+//     auth.currentUser?.uid ?? null
+//   );
+
+//   useEffect(() => {
+//     const unsub = auth.onAuthStateChanged((user) => {
+//       setUserId(user?.uid ?? null);
+//     });
+//     return unsub;
+//   }, []);
+
+//   // ===== Estado de tareas =====
+//   const [tareas, setTareas] = useState<Tarea[]>([]);
+//   const [busqueda, setBusqueda] = useState("");
+//   const [filtro, setFiltro] = useState<Filtro>("Todas");
+
+//   // Modal / formulario
+//   const [modalVisible, setModalVisible] = useState(false);
+//   const [editingTask, setEditingTask] = useState<Tarea | null>(null);
+
+//   const [titulo, setTitulo] = useState("");
+//   const [descripcion, setDescripcion] = useState("");
+//   const [fechaLimite, setFechaLimite] = useState("");
+//   const [prioridad, setPrioridad] = useState<Prioridad>("Media");
+
+//   // Para evitar spam de botón
+//   const [saving, setSaving] = useState(false);
+
+//   // ===================== SYNC LOCAL <-> FIRESTORE =====================
+
+//   // 1️⃣ Al montar la pantalla: intentar cargar local primero
+//   useEffect(() => {
+//     (async () => {
+//       const localTasks = await loadTasks(userId);
+//       if (localTasks.length) {
+//         setTareas(localTasks);
+//       }
+//     })();
+//   }, [userId]);
+
+//   // 2️⃣ Suscripción en tiempo real a Firestore cuando haya usuario
+//   useEffect(() => {
+//     if (!userId) return;
+
+//     const colRef = collection(db, "users", userId, "tasks");
+
+//     // Sembrar Firestore con lo local si está vacío (primer login en otro dispo)
+//     (async () => {
+//       try {
+//         const snap = await getDocs(colRef);
+//         if (snap.empty) {
+//           const localTasks = await loadTasks(userId);
+//           for (const t of localTasks) {
+//             const ref = doc(colRef, String(t.id));
+//             setDoc(ref, t, { merge: true }).catch((e) =>
+//               console.log("[tasks] seed setDoc error", e)
+//             );
+//           }
+//         }
+//       } catch (e) {
+//         console.log("[tasks] seed from local error", e);
+//       }
+//     })();
+
+//     const unsub = onSnapshot(
+//       colRef,
+//       async (snapshot) => {
+//         const cloudTasks: Tarea[] = snapshot.docs.map((d) => {
+//           const data = d.data() as any;
+//           const id =
+//             typeof data.id === "number" ? data.id : Number(d.id) || Date.now();
+//           return { ...data, id } as Tarea;
+//         });
+
+//         setTareas(cloudTasks);
+//         await saveTasks(userId, cloudTasks);
+//       },
+//       (error) => {
+//         console.log("[tasks] onSnapshot error", error);
+//       }
+//     );
+
+//     return () => unsub();
+//   }, [userId]);
+
+//   // ===== Helpers =====
+//   const prioridadColor = (p: Prioridad) => {
+//     switch (p) {
+//       case "Alta":
+//         return "#F44336";
+//       case "Media":
+//         return "#FF9800";
+//       case "Baja":
+//       default:
+//         return "#4CAF50";
+//     }
+//   };
+
+//   const persistLocal = async (next: Tarea[]) => {
+//     setTareas(next);
+//     await saveTasks(userId, next);
+//   };
+
+//   // ===================== DERIVADOS =====================
+//   const tareasFiltradas = useMemo(() => {
+//     return tareas.filter((t) => {
+//       const matchFiltro =
+//         filtro === "Todas"
+//           ? true
+//           : filtro === "Pendientes"
+//           ? !t.completada
+//           : t.completada;
+
+//       const term = busqueda.toLowerCase();
+//       const matchBusqueda =
+//         !term ||
+//         t.titulo.toLowerCase().includes(term) ||
+//         (t.descripcion || "").toLowerCase().includes(term);
+
+//       return matchFiltro && matchBusqueda;
+//     });
+//   }, [tareas, filtro, busqueda]);
+
+//   const totalPendientes = useMemo(
+//     () => tareas.filter((t) => !t.completada).length,
+//     [tareas]
+//   );
+//   const totalCompletadas = useMemo(
+//     () => tareas.filter((t) => t.completada).length,
+//     [tareas]
+//   );
+
+//   // ===================== FORM / MODAL =====================
+//   const resetForm = () => {
+//     setTitulo("");
+//     setDescripcion("");
+//     setFechaLimite("");
+//     setPrioridad("Media");
+//     setEditingTask(null);
+//   };
+
+//   const abrirModalNueva = () => {
+//     resetForm();
+//     setModalVisible(true);
+//   };
+
+//   const abrirModalEditar = (tarea: Tarea) => {
+//     setEditingTask(tarea);
+//     setTitulo(tarea.titulo);
+//     setDescripcion(tarea.descripcion || "");
+//     setFechaLimite(tarea.fechaLimite || "");
+//     setPrioridad(tarea.prioridad);
+//     setModalVisible(true);
+//   };
+
+//   const handleGuardar = async () => {
+//     if (saving) return; // evita doble click
+//     if (!titulo.trim()) {
+//       Alert.alert("Error", "La tarea debe tener un título.");
+//       return;
+//     }
+
+//     setSaving(true);
+
+//     try {
+//       if (editingTask) {
+//         // === Editar ===
+//         const actualizadas = tareas.map((t) =>
+//           t.id === editingTask.id
+//             ? {
+//                 ...t,
+//                 titulo: titulo.trim(),
+//                 descripcion: descripcion.trim(),
+//                 fechaLimite: fechaLimite.trim(),
+//                 prioridad,
+//               }
+//             : t
+//         );
+//         await persistLocal(actualizadas);
+
+//         if (userId) {
+//           const updated = actualizadas.find((t) => t.id === editingTask.id);
+//           if (updated) {
+//             // No hacemos await: no bloquea el cierre del modal
+//             setDoc(
+//               doc(db, "users", userId, "tasks", String(updated.id)),
+//               updated,
+//               { merge: true }
+//             ).catch((e) => console.log("[tasks] error setDoc(edit)", e));
+//           }
+//         }
+
+//         Alert.alert(
+//           "Tareas",
+//           "La tarea se actualizó. Si no hay conexión, se sincronizará cuando vuelva el Internet."
+//         );
+//       } else {
+//         // === Nueva ===
+//         const nueva: Tarea = {
+//           id: Date.now(),
+//           titulo: titulo.trim(),
+//           descripcion: descripcion.trim(),
+//           fechaLimite: fechaLimite.trim(),
+//           prioridad,
+//           completada: false,
+//         };
+
+//         const next = [nueva, ...tareas];
+//         await persistLocal(next);
+
+//         if (userId) {
+//           setDoc(doc(db, "users", userId, "tasks", String(nueva.id)), nueva, {
+//             merge: true,
+//           }).catch((e) => console.log("[tasks] error setDoc(new)", e));
+//         }
+
+//         Alert.alert(
+//           "Tareas",
+//           "Tarea guardada. Si no hay conexión, se sincronizará automáticamente cuando haya Internet."
+//         );
+//       }
+
+//       setModalVisible(false);
+//       resetForm();
+//     } finally {
+//       setSaving(false);
+//     }
+//   };
+
+//   const handleEliminar = (id: number) => {
+//     const tarea = tareas.find((t) => t.id === id);
+//     if (!tarea) return;
+
+//     Alert.alert(
+//       "Eliminar tarea",
+//       `¿Seguro que quieres eliminar "${tarea.titulo}"?`,
+//       [
+//         { text: "Cancelar", style: "cancel" },
+//         {
+//           text: "Eliminar",
+//           style: "destructive",
+//           onPress: async () => {
+//             const filtradas = tareas.filter((t) => t.id !== id);
+//             await persistLocal(filtradas);
+
+//             if (userId) {
+//               // No bloqueamos la UI
+//               deleteDoc(doc(db, "users", userId, "tasks", String(id))).catch(
+//                 (e) => console.log("[tasks] error deleteDoc", e)
+//               );
+//             }
+//           },
+//         },
+//       ]
+//     );
+//   };
+
+//   const handleToggleCompletada = async (id: number) => {
+//     const actualizadas = tareas.map((t) =>
+//       t.id === id ? { ...t, completada: !t.completada } : t
+//     );
+//     await persistLocal(actualizadas);
+
+//     if (userId) {
+//       const updated = actualizadas.find((t) => t.id === id);
+//       if (updated) {
+//         setDoc(doc(db, "users", userId, "tasks", String(updated.id)), updated, {
+//           merge: true,
+//         }).catch((e) => console.log("[tasks] error setDoc(toggle)", e));
+//       }
+//     }
+//   };
+
+//   // ===================== RENDER =====================
+//   const renderTarea = ({ item }: { item: Tarea }) => {
+//     return (
+//       <View style={styles.taskCard}>
+//         {/* Checkbox + info */}
+//         <TouchableOpacity
+//           style={styles.checkboxContainer}
+//           onPress={() => handleToggleCompletada(item.id)}
+//         >
+//           <View
+//             style={[styles.checkbox, item.completada && styles.checkboxChecked]}
+//           >
+//             {item.completada && (
+//               <MaterialIcons name="check" size={16} color="white" />
+//             )}
+//           </View>
+//         </TouchableOpacity>
+
+//         <View style={styles.taskInfo}>
+//           <Text
+//             style={[
+//               styles.taskTitle,
+//               item.completada && styles.taskTitleCompleted,
+//             ]}
+//           >
+//             {item.titulo}
+//           </Text>
+
+//           {item.descripcion ? (
+//             <Text
+//               style={[
+//                 styles.taskDescription,
+//                 item.completada && styles.taskDescriptionCompleted,
+//               ]}
+//               numberOfLines={2}
+//             >
+//               {item.descripcion}
+//             </Text>
+//           ) : null}
+
+//           <View style={styles.taskMetaRow}>
+//             {item.fechaLimite ? (
+//               <View style={styles.metaItem}>
+//                 <MaterialIcons
+//                   name="event"
+//                   size={14}
+//                   color="#777"
+//                   style={{ marginRight: 2 }}
+//                 />
+//                 <Text style={styles.metaText}>{item.fechaLimite}</Text>
+//               </View>
+//             ) : null}
+
+//             <View
+//               style={[
+//                 styles.priorityBadge,
+//                 { backgroundColor: prioridadColor(item.prioridad) },
+//               ]}
+//             >
+//               <Text style={styles.priorityText}>{item.prioridad}</Text>
+//             </View>
+//           </View>
+//         </View>
+
+//         {/* Acciones */}
+//         <View style={styles.taskActions}>
+//           <TouchableOpacity
+//             style={styles.iconButton}
+//             onPress={() => abrirModalEditar(item)}
+//           >
+//             <MaterialIcons name="edit" size={22} color="#FFB300" />
+//           </TouchableOpacity>
+//           <TouchableOpacity
+//             style={styles.iconButton}
+//             onPress={() => handleEliminar(item.id)}
+//           >
+//             <MaterialIcons name="delete" size={22} color="#F44336" />
+//           </TouchableOpacity>
+//         </View>
+//       </View>
+//     );
+//   };
+
+//   return (
+//     <SafeAreaView style={styles.container}>
+//       <StatusBar backgroundColor="red" barStyle="light-content" />
+
+//       {/* Header */}
+//       <View style={styles.header}>
+//         <View>
+//           <Text style={styles.title}>Gestión de Tareas</Text>
+//           <Text style={styles.subtitle}>Organiza tu día como un pro</Text>
+//         </View>
+//         <FontAwesome5 name="tasks" size={30} color="white" />
+//       </View>
+
+//       {/* Resumen */}
+//       <View style={styles.summaryRow}>
+//         <View style={styles.summaryCard}>
+//           <Text style={styles.summaryLabel}>Pendientes</Text>
+//           <Text style={styles.summaryValue}>{totalPendientes}</Text>
+//         </View>
+//         <View style={styles.summaryCard}>
+//           <Text style={styles.summaryLabel}>Completadas</Text>
+//           <Text style={styles.summaryValue}>{totalCompletadas}</Text>
+//         </View>
+//       </View>
+
+//       {/* Buscador */}
+//       <View style={styles.searchContainer}>
+//         <MaterialIcons name="search" size={22} color="#777" />
+//         <TextInput
+//           style={styles.searchInput}
+//           placeholder="Buscar tarea..."
+//           placeholderTextColor="#999"
+//           value={busqueda}
+//           onChangeText={setBusqueda}
+//         />
+//       </View>
+
+//       {/* Filtros */}
+//       <View style={styles.filtersContainer}>
+//         {(["Todas", "Pendientes", "Completadas"] as Filtro[]).map((f) => (
+//           <TouchableOpacity
+//             key={f}
+//             style={[styles.filterChip, filtro === f && styles.filterChipActive]}
+//             onPress={() => setFiltro(f)}
+//           >
+//             <Text
+//               style={[
+//                 styles.filterText,
+//                 filtro === f && styles.filterTextActive,
+//               ]}
+//             >
+//               {f}
+//             </Text>
+//           </TouchableOpacity>
+//         ))}
+//       </View>
+
+//       {/* Lista */}
+//       <View style={styles.listContainer}>
+//         {tareasFiltradas.length === 0 ? (
+//           <View style={styles.emptyState}>
+//             <FontAwesome5 name="clipboard-list" size={38} color="#ccc" />
+//             <Text style={styles.emptyTitle}>Sin tareas aún</Text>
+//             <Text style={styles.emptySubtitle}>
+//               Crea tu primera tarea con el botón de abajo.
+//             </Text>
+//           </View>
+//         ) : (
+//           <FlatList
+//             data={tareasFiltradas}
+//             keyExtractor={(item) => item.id.toString()}
+//             renderItem={renderTarea}
+//             contentContainerStyle={{ paddingBottom: 90 }}
+//           />
+//         )}
+//       </View>
+
+//       {/* FAB agregar tarea */}
+//       <TouchableOpacity
+//         style={styles.fab}
+//         activeOpacity={0.85}
+//         onPress={abrirModalNueva}
+//       >
+//         <MaterialIcons name="add" size={30} color="white" />
+//       </TouchableOpacity>
+
+//       {/* Modal Agregar / Editar */}
+//       <Modal
+//         animationType="slide"
+//         transparent
+//         visible={modalVisible}
+//         onRequestClose={() => {
+//           setModalVisible(false);
+//           resetForm();
+//         }}
+//       >
+//         <View style={styles.modalBackground}>
+//           <KeyboardAvoidingView
+//             style={{ flex: 1 }}
+//             behavior={Platform.OS === "ios" ? "padding" : undefined}
+//           >
+//             <ScrollView
+//               contentContainerStyle={styles.modalScrollContent}
+//               keyboardShouldPersistTaps="handled"
+//             >
+//               <View style={styles.modalContainer}>
+//                 <Text style={styles.modalTitle}>
+//                   {editingTask ? "Editar tarea" : "Nueva tarea"}
+//                 </Text>
+
+//                 <Text style={styles.label}>Título</Text>
+//                 <TextInput
+//                   style={styles.input}
+//                   placeholder="Ej. Entregar reporte de investigación"
+//                   value={titulo}
+//                   onChangeText={setTitulo}
+//                 />
+
+//                 <Text style={styles.label}>Descripción (opcional)</Text>
+//                 <TextInput
+//                   style={[
+//                     styles.input,
+//                     { height: 80, textAlignVertical: "top" },
+//                   ]}
+//                   placeholder="Detalles, pasos a seguir, etc."
+//                   value={descripcion}
+//                   onChangeText={setDescripcion}
+//                   multiline
+//                 />
+
+//                 <Text style={styles.label}>Fecha límite (opcional)</Text>
+//                 <TextInput
+//                   style={styles.input}
+//                   placeholder="Ej. 30/11/2025"
+//                   value={fechaLimite}
+//                   onChangeText={setFechaLimite}
+//                 />
+
+//                 <Text style={styles.label}>Prioridad</Text>
+//                 <View style={styles.priorityRow}>
+//                   {PRIORIDADES.map((p) => (
+//                     <TouchableOpacity
+//                       key={p}
+//                       style={[
+//                         styles.priorityChip,
+//                         prioridad === p && {
+//                           backgroundColor: prioridadColor(p),
+//                           borderColor: prioridadColor(p),
+//                         },
+//                       ]}
+//                       onPress={() => setPrioridad(p)}
+//                     >
+//                       <Text
+//                         style={[
+//                           styles.priorityChipText,
+//                           prioridad === p && { color: "white" },
+//                         ]}
+//                       >
+//                         {p}
+//                       </Text>
+//                     </TouchableOpacity>
+//                   ))}
+//                 </View>
+
+//                 <View style={styles.modalButtonsRow}>
+//                   <TouchableOpacity
+//                     style={[styles.modalButton, { backgroundColor: "#F44336" }]}
+//                     onPress={() => {
+//                       setModalVisible(false);
+//                       resetForm();
+//                     }}
+//                   >
+//                     <Text style={styles.buttonText}>Cancelar</Text>
+//                   </TouchableOpacity>
+//                   <TouchableOpacity
+//                     style={[styles.modalButton, { backgroundColor: "#4CAF50" }]}
+//                     onPress={handleGuardar}
+//                     disabled={saving}
+//                   >
+//                     <Text style={styles.buttonText}>
+//                       {editingTask ? "Guardar cambios" : "Guardar"}
+//                     </Text>
+//                   </TouchableOpacity>
+//                 </View>
+//               </View>
+//             </ScrollView>
+//           </KeyboardAvoidingView>
+//         </View>
+//       </Modal>
+//     </SafeAreaView>
+//   );
+// };
+
+// // ===== Estilos (como tu FASE 2) =====
+// const styles = StyleSheet.create({
+//   container: { flex: 1, backgroundColor: "beige" },
+
+//   header: {
+//     backgroundColor: "red",
+//     paddingHorizontal: 16,
+//     paddingVertical: 14,
+//     flexDirection: "row",
+//     justifyContent: "space-between",
+//     alignItems: "center",
+//     elevation: 4,
+//   },
+//   title: {
+//     fontSize: FONT_SIZES.large,
+//     fontWeight: "bold",
+//     color: "white",
+//   },
+//   subtitle: {
+//     fontSize: FONT_SIZES.small,
+//     color: "#f5f5f5",
+//   },
+
+//   summaryRow: {
+//     flexDirection: "row",
+//     justifyContent: "space-between",
+//     marginHorizontal: 16,
+//     marginTop: 12,
+//   },
+//   summaryCard: {
+//     flex: 1,
+//     backgroundColor: "white",
+//     padding: 12,
+//     borderRadius: 14,
+//     elevation: 2,
+//     marginHorizontal: 4,
+//   },
+//   summaryLabel: {
+//     fontSize: FONT_SIZES.small,
+//     color: "#777",
+//   },
+//   summaryValue: {
+//     marginTop: 4,
+//     fontSize: FONT_SIZES.large,
+//     fontWeight: "bold",
+//     color: "red",
+//   },
+
+//   searchContainer: {
+//     flexDirection: "row",
+//     alignItems: "center",
+//     marginHorizontal: 16,
+//     marginTop: 10,
+//     paddingHorizontal: 10,
+//     paddingVertical: 8,
+//     borderRadius: 10,
+//     backgroundColor: "white",
+//     elevation: 2,
+//   },
+//   searchInput: {
+//     flex: 1,
+//     marginLeft: 8,
+//     fontSize: FONT_SIZES.medium,
+//     color: "#333",
+//   },
+
+//   filtersContainer: {
+//     flexDirection: "row",
+//     marginHorizontal: 16,
+//     marginTop: 10,
+//   },
+//   filterChip: {
+//     paddingHorizontal: 12,
+//     paddingVertical: 6,
+//     borderRadius: 20,
+//     borderWidth: 1,
+//     borderColor: "#ccc",
+//     marginRight: 8,
+//     backgroundColor: "white",
+//   },
+//   filterChipActive: {
+//     backgroundColor: "red",
+//     borderColor: "red",
+//   },
+//   filterText: {
+//     fontSize: FONT_SIZES.small,
+//     color: "#555",
+//   },
+//   filterTextActive: {
+//     color: "white",
+//     fontWeight: "bold",
+//   },
+
+//   listContainer: {
+//     flex: 1,
+//     marginHorizontal: 16,
+//     marginTop: 8,
+//   },
+
+//   taskCard: {
+//     flexDirection: "row",
+//     backgroundColor: "white",
+//     borderRadius: 12,
+//     padding: 12,
+//     marginBottom: 10,
+//     elevation: 2,
+//   },
+//   checkboxContainer: {
+//     paddingRight: 8,
+//     justifyContent: "center",
+//   },
+//   checkbox: {
+//     width: 22,
+//     height: 22,
+//     borderRadius: 11,
+//     borderWidth: 2,
+//     borderColor: "red",
+//     alignItems: "center",
+//     justifyContent: "center",
+//   },
+//   checkboxChecked: {
+//     backgroundColor: "red",
+//   },
+//   taskInfo: { flex: 1 },
+//   taskTitle: {
+//     fontSize: FONT_SIZES.medium,
+//     fontWeight: "600",
+//     color: "#333",
+//   },
+//   taskTitleCompleted: {
+//     textDecorationLine: "line-through",
+//     color: "#999",
+//   },
+//   taskDescription: {
+//     marginTop: 2,
+//     fontSize: FONT_SIZES.small,
+//     color: "#666",
+//   },
+//   taskDescriptionCompleted: {
+//     textDecorationLine: "line-through",
+//     color: "#aaa",
+//   },
+//   taskMetaRow: {
+//     flexDirection: "row",
+//     alignItems: "center",
+//     marginTop: 6,
+//   },
+//   metaItem: {
+//     flexDirection: "row",
+//     alignItems: "center",
+//     marginRight: 10,
+//   },
+//   metaText: {
+//     fontSize: FONT_SIZES.small,
+//     color: "#777",
+//   },
+//   priorityBadge: {
+//     paddingHorizontal: 8,
+//     paddingVertical: 2,
+//     borderRadius: 10,
+//   },
+//   priorityText: {
+//     fontSize: FONT_SIZES.small,
+//     color: "white",
+//     fontWeight: "bold",
+//   },
+
+//   taskActions: {
+//     justifyContent: "center",
+//     alignItems: "flex-end",
+//     marginLeft: 8,
+//   },
+//   iconButton: { padding: 4 },
+
+//   emptyState: {
+//     flex: 1,
+//     alignItems: "center",
+//     justifyContent: "center",
+//     paddingHorizontal: 32,
+//   },
+//   emptyTitle: {
+//     marginTop: 10,
+//     fontSize: FONT_SIZES.medium,
+//     fontWeight: "600",
+//     color: "#555",
+//   },
+//   emptySubtitle: {
+//     marginTop: 4,
+//     fontSize: FONT_SIZES.small,
+//     color: "#888",
+//     textAlign: "center",
+//   },
+
+//   fab: {
+//     position: "absolute",
+//     right: 20,
+//     bottom: 30,
+//     width: 58,
+//     height: 58,
+//     borderRadius: 29,
+//     backgroundColor: "red",
+//     alignItems: "center",
+//     justifyContent: "center",
+//     elevation: 6,
+//   },
+
+//   modalBackground: {
+//     flex: 1,
+//     backgroundColor: "rgba(0,0,0,0.5)",
+//     padding: 20,
+//   },
+//   modalScrollContent: {
+//     flexGrow: 1,
+//     justifyContent: "center",
+//   },
+//   modalContainer: {
+//     backgroundColor: "white",
+//     borderRadius: 12,
+//     padding: 20,
+//   },
+//   modalTitle: {
+//     fontSize: FONT_SIZES.large,
+//     fontWeight: "bold",
+//     textAlign: "center",
+//     marginBottom: 16,
+//   },
+//   label: {
+//     fontSize: FONT_SIZES.small,
+//     marginBottom: 6,
+//     fontWeight: "bold",
+//   },
+//   input: {
+//     borderWidth: 1,
+//     borderColor: "#BDBDBD",
+//     borderRadius: 8,
+//     padding: 10,
+//     marginBottom: 12,
+//     fontSize: FONT_SIZES.medium,
+//     backgroundColor: "white",
+//   },
+//   priorityRow: {
+//     flexDirection: "row",
+//     marginBottom: 12,
+//   },
+//   priorityChip: {
+//     paddingHorizontal: 10,
+//     paddingVertical: 6,
+//     borderRadius: 20,
+//     borderWidth: 1,
+//     borderColor: "#ccc",
+//     marginRight: 8,
+//     backgroundColor: "white",
+//   },
+//   priorityChipText: {
+//     fontSize: FONT_SIZES.small,
+//     color: "#555",
+//   },
+
+//   modalButtonsRow: {
+//     flexDirection: "row",
+//     justifyContent: "space-between",
+//     marginTop: 8,
+//   },
+//   modalButton: {
+//     flex: 1,
+//     paddingVertical: 12,
+//     borderRadius: 8,
+//     alignItems: "center",
+//     marginHorizontal: 4,
+//   },
+//   buttonText: {
+//     color: "white",
+//     fontSize: FONT_SIZES.medium,
+//     fontWeight: "bold",
+//   },
+// });
+
+// export default TareasScreen;
+
+// Lo nuevito nuevito
+// src/screens/tareas/TareasScreen.tsx
+// src/screens/tareas/TareasScreen.tsx
+// Offline local (AsyncStorage) + Firestore realtime + NOTIFICACIONES (mañana / 1 hora antes)
+// UI mejorada sin cambiar la lógica base.
 import React, { useEffect, useMemo, useState } from "react";
 import {
   View,
@@ -19,6 +897,7 @@ import {
   Alert,
 } from "react-native";
 import { FontAwesome5, MaterialIcons } from "@expo/vector-icons";
+import * as Notifications from "expo-notifications";
 import { FONT_SIZES } from "../../../types";
 
 // 🔐 Firebase
@@ -32,7 +911,7 @@ import {
   getDocs,
 } from "firebase/firestore";
 
-// 🔹 Storage local
+// 💾 Local storage
 import {
   loadTasks,
   saveTasks,
@@ -45,6 +924,124 @@ type Filtro = "Todas" | "Pendientes" | "Completadas";
 
 const PRIORIDADES: Prioridad[] = ["Baja", "Media", "Alta"];
 
+/* ======================================================
+   🔔 NOTIFICACIONES – HELPERS
+   Formato esperado: "DD/MM/YYYY"
+====================================================== */
+
+const parseFechaLimite = (fecha: string): Date | null => {
+  const parts = fecha.split("/");
+  if (parts.length !== 3) return null;
+
+  const [d, m, y] = parts.map(Number);
+  if (!d || !m || !y) return null;
+
+  // Hora fija 9:00 AM para "mañana se entrega"
+  const dt = new Date(y, m - 1, d, 9, 0, 0);
+  return isNaN(dt.getTime()) ? null : dt;
+};
+
+const cancelTaskNotifications = async (taskId: number) => {
+  try {
+    const scheduled = await Notifications.getAllScheduledNotificationsAsync();
+    for (const n of scheduled) {
+      const data: any = n?.content?.data;
+      if (data?.taskId === taskId) {
+        await Notifications.cancelScheduledNotificationAsync(n.identifier);
+      }
+    }
+  } catch (e) {
+    console.log("[tasks] cancelTaskNotifications error", e);
+  }
+};
+
+const scheduleTaskNotifications = async (tarea: Tarea) => {
+  if (!tarea.fechaLimite) return;
+
+  const fecha = parseFechaLimite(tarea.fechaLimite);
+  if (!fecha) return;
+
+  // Pedimos permiso (si ya lo concedieron, no molesta)
+  const perm = await Notifications.requestPermissionsAsync();
+  if (perm.status !== "granted") return;
+
+  // Si la tarea se edita, cancelamos las anteriores
+  await cancelTaskNotifications(tarea.id);
+
+  const now = new Date();
+
+  // 📅 1 día antes (9AM)
+  const dayBefore = new Date(fecha);
+  dayBefore.setDate(fecha.getDate() - 1);
+
+  // ⏰ 1 hora antes (de la hora fija 9AM => 8AM)
+  const hourBefore = new Date(fecha);
+  hourBefore.setHours(fecha.getHours() - 1);
+
+  if (dayBefore > now) {
+    await Notifications.scheduleNotificationAsync({
+      content: {
+        title: "📌 Tarea próxima",
+        body: `Mañana se entrega: ${tarea.titulo}`,
+        data: { taskId: tarea.id },
+      },
+      trigger: {
+        type: Notifications.SchedulableTriggerInputTypes.DATE,
+        date: dayBefore,
+      },
+    });
+  }
+
+  if (hourBefore > now) {
+    await Notifications.scheduleNotificationAsync({
+      content: {
+        title: "⏰ Tarea urgente",
+        body: `En 1 hora se entrega: ${tarea.titulo}`,
+        data: { taskId: tarea.id },
+      },
+      trigger: {
+        type: Notifications.SchedulableTriggerInputTypes.DATE,
+        date: hourBefore,
+      },
+    });
+  }
+};
+
+/* ======================================================
+   🎨 UI HELPERS
+====================================================== */
+
+const prioridadColor = (p: Prioridad) => {
+  switch (p) {
+    case "Alta":
+      return "#F44336";
+    case "Media":
+      return "#FF9800";
+    case "Baja":
+    default:
+      return "#4CAF50";
+  }
+};
+
+const daysLeftLabel = (fechaLimite?: string) => {
+  if (!fechaLimite) return null;
+  const dt = parseFechaLimite(fechaLimite);
+  if (!dt) return null;
+
+  const today = new Date();
+  // normalizamos a medianoche para cálculo de días
+  const a = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const b = new Date(dt.getFullYear(), dt.getMonth(), dt.getDate());
+
+  const diffMs = b.getTime() - a.getTime();
+  const days = Math.round(diffMs / (1000 * 60 * 60 * 24));
+
+  if (days < 0) return { text: "Vencida", color: "#B71C1C" };
+  if (days === 0) return { text: "Hoy", color: "#E53935" };
+  if (days === 1) return { text: "Mañana", color: "#FB8C00" };
+  return { text: `En ${days} días`, color: "#546E7A" };
+};
+
 const TareasScreen: React.FC = () => {
   // ===== Usuario actual =====
   const [userId, setUserId] = useState<string | null>(
@@ -52,9 +1049,7 @@ const TareasScreen: React.FC = () => {
   );
 
   useEffect(() => {
-    const unsub = auth.onAuthStateChanged((user) => {
-      setUserId(user?.uid ?? null);
-    });
+    const unsub = auth.onAuthStateChanged((u) => setUserId(u?.uid ?? null));
     return unsub;
   }, []);
 
@@ -75,98 +1070,78 @@ const TareasScreen: React.FC = () => {
   // Para evitar spam de botón
   const [saving, setSaving] = useState(false);
 
-  // ===================== SYNC LOCAL <-> FIRESTORE =====================
-
-  // 1️⃣ Al montar la pantalla: intentar cargar local primero
+  /* ===================== LOAD LOCAL ===================== */
   useEffect(() => {
     (async () => {
-      const localTasks = await loadTasks(userId);
-      if (localTasks.length) {
-        setTareas(localTasks);
-      }
+      const local = await loadTasks(userId);
+      if (local.length) setTareas(local);
     })();
   }, [userId]);
 
-  // 2️⃣ Suscripción en tiempo real a Firestore cuando haya usuario
+  /* ===================== FIRESTORE REALTIME ===================== */
   useEffect(() => {
     if (!userId) return;
 
     const colRef = collection(db, "users", userId, "tasks");
 
-    // Sembrar Firestore con lo local si está vacío (primer login en otro dispo)
+    // Seed si está vacío en la nube
     (async () => {
       try {
         const snap = await getDocs(colRef);
         if (snap.empty) {
-          const localTasks = await loadTasks(userId);
-          for (const t of localTasks) {
-            const ref = doc(colRef, String(t.id));
-            setDoc(ref, t, { merge: true }).catch((e) =>
-              console.log("[tasks] seed setDoc error", e)
+          const local = await loadTasks(userId);
+          for (const t of local) {
+            setDoc(doc(colRef, String(t.id)), t, { merge: true }).catch(
+              () => {}
             );
           }
         }
       } catch (e) {
-        console.log("[tasks] seed from local error", e);
+        console.log("[tasks] seed error", e);
       }
     })();
 
     const unsub = onSnapshot(
       colRef,
-      async (snapshot) => {
-        const cloudTasks: Tarea[] = snapshot.docs.map((d) => {
+      async (snap) => {
+        const cloud: Tarea[] = snap.docs.map((d) => {
           const data = d.data() as any;
           const id =
             typeof data.id === "number" ? data.id : Number(d.id) || Date.now();
           return { ...data, id } as Tarea;
         });
 
-        setTareas(cloudTasks);
-        await saveTasks(userId, cloudTasks);
+        setTareas(cloud);
+        await saveTasks(userId, cloud);
       },
-      (error) => {
-        console.log("[tasks] onSnapshot error", error);
-      }
+      (err) => console.log("[tasks] snapshot err", err)
     );
 
     return () => unsub();
   }, [userId]);
-
-  // ===== Helpers =====
-  const prioridadColor = (p: Prioridad) => {
-    switch (p) {
-      case "Alta":
-        return "#F44336";
-      case "Media":
-        return "#FF9800";
-      case "Baja":
-      default:
-        return "#4CAF50";
-    }
-  };
 
   const persistLocal = async (next: Tarea[]) => {
     setTareas(next);
     await saveTasks(userId, next);
   };
 
-  // ===================== DERIVADOS =====================
+  /* ===================== DERIVADOS ===================== */
   const tareasFiltradas = useMemo(() => {
     return tareas.filter((t) => {
-      const matchFiltro =
+      const okFiltro =
         filtro === "Todas"
           ? true
           : filtro === "Pendientes"
           ? !t.completada
           : t.completada;
 
-      const term = busqueda.toLowerCase();
-      const matchBusqueda =
+      const term = busqueda.trim().toLowerCase();
+      const okSearch =
         !term ||
         t.titulo.toLowerCase().includes(term) ||
         (t.descripcion || "").toLowerCase().includes(term);
 
-      return matchFiltro && matchBusqueda;
+      return okFiltro && okSearch;
     });
   }, [tareas, filtro, busqueda]);
 
@@ -179,7 +1154,7 @@ const TareasScreen: React.FC = () => {
     [tareas]
   );
 
-  // ===================== FORM / MODAL =====================
+  /* ===================== FORM ===================== */
   const resetForm = () => {
     setTitulo("");
     setDescripcion("");
@@ -193,17 +1168,17 @@ const TareasScreen: React.FC = () => {
     setModalVisible(true);
   };
 
-  const abrirModalEditar = (tarea: Tarea) => {
-    setEditingTask(tarea);
-    setTitulo(tarea.titulo);
-    setDescripcion(tarea.descripcion || "");
-    setFechaLimite(tarea.fechaLimite || "");
-    setPrioridad(tarea.prioridad);
+  const abrirModalEditar = (t: Tarea) => {
+    setEditingTask(t);
+    setTitulo(t.titulo);
+    setDescripcion(t.descripcion || "");
+    setFechaLimite(t.fechaLimite || "");
+    setPrioridad(t.prioridad);
     setModalVisible(true);
   };
 
   const handleGuardar = async () => {
-    if (saving) return; // evita doble click
+    if (saving) return;
     if (!titulo.trim()) {
       Alert.alert("Error", "La tarea debe tener un título.");
       return;
@@ -212,40 +1187,33 @@ const TareasScreen: React.FC = () => {
     setSaving(true);
 
     try {
+      let tareaFinal: Tarea;
+
       if (editingTask) {
-        // === Editar ===
-        const actualizadas = tareas.map((t) =>
-          t.id === editingTask.id
-            ? {
-                ...t,
-                titulo: titulo.trim(),
-                descripcion: descripcion.trim(),
-                fechaLimite: fechaLimite.trim(),
-                prioridad,
-              }
-            : t
+        tareaFinal = {
+          ...editingTask,
+          titulo: titulo.trim(),
+          descripcion: descripcion.trim(),
+          fechaLimite: fechaLimite.trim(),
+          prioridad,
+        };
+
+        const next = tareas.map((t) =>
+          t.id === tareaFinal.id ? tareaFinal : t
         );
-        await persistLocal(actualizadas);
+        await persistLocal(next);
 
         if (userId) {
-          const updated = actualizadas.find((t) => t.id === editingTask.id);
-          if (updated) {
-            // No hacemos await: no bloquea el cierre del modal
-            setDoc(
-              doc(db, "users", userId, "tasks", String(updated.id)),
-              updated,
-              { merge: true }
-            ).catch((e) => console.log("[tasks] error setDoc(edit)", e));
-          }
+          setDoc(
+            doc(db, "users", userId, "tasks", String(tareaFinal.id)),
+            tareaFinal,
+            {
+              merge: true,
+            }
+          ).catch((e) => console.log("[tasks] setDoc(edit) error", e));
         }
-
-        Alert.alert(
-          "Tareas",
-          "La tarea se actualizó. Si no hay conexión, se sincronizará cuando vuelva el Internet."
-        );
       } else {
-        // === Nueva ===
-        const nueva: Tarea = {
+        tareaFinal = {
           id: Date.now(),
           titulo: titulo.trim(),
           descripcion: descripcion.trim(),
@@ -254,124 +1222,108 @@ const TareasScreen: React.FC = () => {
           completada: false,
         };
 
-        const next = [nueva, ...tareas];
+        const next = [tareaFinal, ...tareas];
         await persistLocal(next);
 
         if (userId) {
-          setDoc(doc(db, "users", userId, "tasks", String(nueva.id)), nueva, {
-            merge: true,
-          }).catch((e) => console.log("[tasks] error setDoc(new)", e));
+          setDoc(
+            doc(db, "users", userId, "tasks", String(tareaFinal.id)),
+            tareaFinal,
+            {
+              merge: true,
+            }
+          ).catch((e) => console.log("[tasks] setDoc(new) error", e));
         }
-
-        Alert.alert(
-          "Tareas",
-          "Tarea guardada. Si no hay conexión, se sincronizará automáticamente cuando haya Internet."
-        );
       }
+
+      // 🔔 Programar recordatorios si hay fecha
+      await scheduleTaskNotifications(tareaFinal);
 
       setModalVisible(false);
       resetForm();
+
+      Alert.alert(
+        "Tareas",
+        "Guardado ✅ (si no hay internet, se sincroniza cuando vuelva)."
+      );
     } finally {
       setSaving(false);
     }
   };
 
   const handleEliminar = (id: number) => {
-    const tarea = tareas.find((t) => t.id === id);
-    if (!tarea) return;
+    const t = tareas.find((x) => x.id === id);
+    if (!t) return;
 
-    Alert.alert(
-      "Eliminar tarea",
-      `¿Seguro que quieres eliminar "${tarea.titulo}"?`,
-      [
-        { text: "Cancelar", style: "cancel" },
-        {
-          text: "Eliminar",
-          style: "destructive",
-          onPress: async () => {
-            const filtradas = tareas.filter((t) => t.id !== id);
-            await persistLocal(filtradas);
+    Alert.alert("Eliminar tarea", `¿Eliminar "${t.titulo}"?`, [
+      { text: "Cancelar", style: "cancel" },
+      {
+        text: "Eliminar",
+        style: "destructive",
+        onPress: async () => {
+          const next = tareas.filter((x) => x.id !== id);
+          await persistLocal(next);
 
-            if (userId) {
-              // No bloqueamos la UI
-              deleteDoc(doc(db, "users", userId, "tasks", String(id))).catch(
-                (e) => console.log("[tasks] error deleteDoc", e)
-              );
-            }
-          },
+          // 🔔 cancelar recordatorios
+          await cancelTaskNotifications(id);
+
+          if (userId) {
+            deleteDoc(doc(db, "users", userId, "tasks", String(id))).catch(
+              (e) => console.log("[tasks] deleteDoc error", e)
+            );
+          }
         },
-      ]
-    );
+      },
+    ]);
   };
 
   const handleToggleCompletada = async (id: number) => {
-    const actualizadas = tareas.map((t) =>
+    const next = tareas.map((t) =>
       t.id === id ? { ...t, completada: !t.completada } : t
     );
-    await persistLocal(actualizadas);
+    await persistLocal(next);
 
     if (userId) {
-      const updated = actualizadas.find((t) => t.id === id);
+      const updated = next.find((t) => t.id === id);
       if (updated) {
         setDoc(doc(db, "users", userId, "tasks", String(updated.id)), updated, {
           merge: true,
-        }).catch((e) => console.log("[tasks] error setDoc(toggle)", e));
+        }).catch((e) => console.log("[tasks] setDoc(toggle) error", e));
       }
     }
   };
 
-  // ===================== RENDER =====================
+  /* ===================== RENDER ITEM ===================== */
   const renderTarea = ({ item }: { item: Tarea }) => {
+    const left = daysLeftLabel(item.fechaLimite);
+
     return (
       <View style={styles.taskCard}>
-        {/* Checkbox + info */}
         <TouchableOpacity
-          style={styles.checkboxContainer}
+          style={styles.checkWrap}
           onPress={() => handleToggleCompletada(item.id)}
+          activeOpacity={0.8}
         >
           <View
             style={[styles.checkbox, item.completada && styles.checkboxChecked]}
           >
-            {item.completada && (
+            {item.completada ? (
               <MaterialIcons name="check" size={16} color="white" />
-            )}
+            ) : null}
           </View>
         </TouchableOpacity>
 
         <View style={styles.taskInfo}>
-          <Text
-            style={[
-              styles.taskTitle,
-              item.completada && styles.taskTitleCompleted,
-            ]}
-          >
-            {item.titulo}
-          </Text>
-
-          {item.descripcion ? (
+          <View style={styles.taskTopRow}>
             <Text
               style={[
-                styles.taskDescription,
-                item.completada && styles.taskDescriptionCompleted,
+                styles.taskTitle,
+                item.completada && styles.taskTitleCompleted,
               ]}
-              numberOfLines={2}
+              numberOfLines={1}
             >
-              {item.descripcion}
+              {item.titulo}
             </Text>
-          ) : null}
-
-          <View style={styles.taskMetaRow}>
-            {item.fechaLimite ? (
-              <View style={styles.metaItem}>
-                <MaterialIcons
-                  name="event"
-                  size={14}
-                  color="#777"
-                  style={{ marginRight: 2 }}
-                />
-                <Text style={styles.metaText}>{item.fechaLimite}</Text>
-              </View>
-            ) : null}
 
             <View
               style={[
@@ -382,18 +1334,54 @@ const TareasScreen: React.FC = () => {
               <Text style={styles.priorityText}>{item.prioridad}</Text>
             </View>
           </View>
+
+          {item.descripcion ? (
+            <Text
+              style={[
+                styles.taskDesc,
+                item.completada && styles.taskDescCompleted,
+              ]}
+              numberOfLines={2}
+            >
+              {item.descripcion}
+            </Text>
+          ) : null}
+
+          <View style={styles.metaRow}>
+            {item.fechaLimite ? (
+              <View style={styles.metaItem}>
+                <MaterialIcons name="event" size={14} color="#777" />
+                <Text style={styles.metaText}> {item.fechaLimite}</Text>
+              </View>
+            ) : (
+              <View style={styles.metaItem}>
+                <MaterialIcons name="event-busy" size={14} color="#B0B0B0" />
+                <Text style={[styles.metaText, { color: "#B0B0B0" }]}>
+                  {" "}
+                  Sin fecha
+                </Text>
+              </View>
+            )}
+
+            {left ? (
+              <View style={[styles.leftBadge, { borderColor: left.color }]}>
+                <Text style={[styles.leftText, { color: left.color }]}>
+                  {left.text}
+                </Text>
+              </View>
+            ) : null}
+          </View>
         </View>
 
-        {/* Acciones */}
-        <View style={styles.taskActions}>
+        <View style={styles.actionsCol}>
           <TouchableOpacity
-            style={styles.iconButton}
+            style={styles.iconBtn}
             onPress={() => abrirModalEditar(item)}
           >
             <MaterialIcons name="edit" size={22} color="#FFB300" />
           </TouchableOpacity>
           <TouchableOpacity
-            style={styles.iconButton}
+            style={styles.iconBtn}
             onPress={() => handleEliminar(item.id)}
           >
             <MaterialIcons name="delete" size={22} color="#F44336" />
@@ -403,6 +1391,7 @@ const TareasScreen: React.FC = () => {
     );
   };
 
+  /* ===================== UI ===================== */
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar backgroundColor="red" barStyle="light-content" />
@@ -410,10 +1399,10 @@ const TareasScreen: React.FC = () => {
       {/* Header */}
       <View style={styles.header}>
         <View>
-          <Text style={styles.title}>Gestión de Tareas</Text>
-          <Text style={styles.subtitle}>Organiza tu día como un pro</Text>
+          <Text style={styles.headerTitle}>Gestión de Tareas</Text>
+          <Text style={styles.headerSub}>Organiza tu día como un pro ✨</Text>
         </View>
-        <FontAwesome5 name="tasks" size={30} color="white" />
+        <FontAwesome5 name="tasks" size={28} color="white" />
       </View>
 
       {/* Resumen */}
@@ -438,15 +1427,24 @@ const TareasScreen: React.FC = () => {
           value={busqueda}
           onChangeText={setBusqueda}
         />
+        {busqueda.length ? (
+          <TouchableOpacity
+            onPress={() => setBusqueda("")}
+            style={styles.clearBtn}
+          >
+            <MaterialIcons name="close" size={18} color="#777" />
+          </TouchableOpacity>
+        ) : null}
       </View>
 
       {/* Filtros */}
-      <View style={styles.filtersContainer}>
+      <View style={styles.filtersRow}>
         {(["Todas", "Pendientes", "Completadas"] as Filtro[]).map((f) => (
           <TouchableOpacity
             key={f}
             style={[styles.filterChip, filtro === f && styles.filterChipActive]}
             onPress={() => setFiltro(f)}
+            activeOpacity={0.85}
           >
             <Text
               style={[
@@ -461,62 +1459,62 @@ const TareasScreen: React.FC = () => {
       </View>
 
       {/* Lista */}
-      <View style={styles.listContainer}>
+      <View style={styles.listWrap}>
         {tareasFiltradas.length === 0 ? (
           <View style={styles.emptyState}>
-            <FontAwesome5 name="clipboard-list" size={38} color="#ccc" />
+            <FontAwesome5 name="clipboard-list" size={40} color="#cfcfcf" />
             <Text style={styles.emptyTitle}>Sin tareas aún</Text>
-            <Text style={styles.emptySubtitle}>
-              Crea tu primera tarea con el botón de abajo.
+            <Text style={styles.emptySub}>
+              Crea tu primera tarea con el botón +
             </Text>
           </View>
         ) : (
           <FlatList
             data={tareasFiltradas}
-            keyExtractor={(item) => item.id.toString()}
+            keyExtractor={(i) => i.id.toString()}
             renderItem={renderTarea}
-            contentContainerStyle={{ paddingBottom: 90 }}
+            contentContainerStyle={{ paddingBottom: 110 }}
+            showsVerticalScrollIndicator={false}
           />
         )}
       </View>
 
-      {/* FAB agregar tarea */}
+      {/* FAB */}
       <TouchableOpacity
         style={styles.fab}
-        activeOpacity={0.85}
+        activeOpacity={0.9}
         onPress={abrirModalNueva}
       >
         <MaterialIcons name="add" size={30} color="white" />
       </TouchableOpacity>
 
-      {/* Modal Agregar / Editar */}
+      {/* MODAL */}
       <Modal
-        animationType="slide"
         transparent
         visible={modalVisible}
+        animationType="slide"
         onRequestClose={() => {
           setModalVisible(false);
           resetForm();
         }}
       >
-        <View style={styles.modalBackground}>
+        <View style={styles.modalBg}>
           <KeyboardAvoidingView
             style={{ flex: 1 }}
             behavior={Platform.OS === "ios" ? "padding" : undefined}
           >
             <ScrollView
-              contentContainerStyle={styles.modalScrollContent}
+              contentContainerStyle={styles.modalScroll}
               keyboardShouldPersistTaps="handled"
             >
-              <View style={styles.modalContainer}>
+              <View style={styles.modalCard}>
                 <Text style={styles.modalTitle}>
                   {editingTask ? "Editar tarea" : "Nueva tarea"}
                 </Text>
-
                 <Text style={styles.label}>Título</Text>
                 <TextInput
                   style={styles.input}
-                  placeholder="Ej. Entregar reporte de investigación"
+                  placeholder="Ej. Entregar reporte"
                   value={titulo}
                   onChangeText={setTitulo}
                 />
@@ -525,68 +1523,82 @@ const TareasScreen: React.FC = () => {
                 <TextInput
                   style={[
                     styles.input,
-                    { height: 80, textAlignVertical: "top" },
+                    { height: 90, textAlignVertical: "top" },
                   ]}
-                  placeholder="Detalles, pasos a seguir, etc."
+                  placeholder="Detalles, pasos, etc."
                   value={descripcion}
                   onChangeText={setDescripcion}
                   multiline
                 />
 
-                <Text style={styles.label}>Fecha límite (opcional)</Text>
+                <Text style={styles.label}>Fecha límite (DD/MM/YYYY)</Text>
                 <TextInput
                   style={styles.input}
                   placeholder="Ej. 30/11/2025"
                   value={fechaLimite}
                   onChangeText={setFechaLimite}
+                  keyboardType="default"
                 />
 
                 <Text style={styles.label}>Prioridad</Text>
                 <View style={styles.priorityRow}>
-                  {PRIORIDADES.map((p) => (
-                    <TouchableOpacity
-                      key={p}
-                      style={[
-                        styles.priorityChip,
-                        prioridad === p && {
-                          backgroundColor: prioridadColor(p),
-                          borderColor: prioridadColor(p),
-                        },
-                      ]}
-                      onPress={() => setPrioridad(p)}
-                    >
-                      <Text
+                  {PRIORIDADES.map((p) => {
+                    const active = prioridad === p;
+                    const c = prioridadColor(p);
+                    return (
+                      <TouchableOpacity
+                        key={p}
                         style={[
-                          styles.priorityChipText,
-                          prioridad === p && { color: "white" },
+                          styles.priorityChip,
+                          active && { backgroundColor: c, borderColor: c },
                         ]}
+                        onPress={() => setPrioridad(p)}
+                        activeOpacity={0.85}
                       >
-                        {p}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
+                        <Text
+                          style={[
+                            styles.priorityChipText,
+                            active && { color: "white" },
+                          ]}
+                        >
+                          {p}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
                 </View>
 
-                <View style={styles.modalButtonsRow}>
+                <View style={styles.modalBtnsRow}>
                   <TouchableOpacity
-                    style={[styles.modalButton, { backgroundColor: "#F44336" }]}
+                    style={[styles.modalBtn, { backgroundColor: "#F44336" }]}
                     onPress={() => {
                       setModalVisible(false);
                       resetForm();
                     }}
+                    activeOpacity={0.9}
                   >
-                    <Text style={styles.buttonText}>Cancelar</Text>
+                    <Text style={styles.modalBtnText}>Cancelar</Text>
                   </TouchableOpacity>
+
                   <TouchableOpacity
-                    style={[styles.modalButton, { backgroundColor: "#4CAF50" }]}
+                    style={[
+                      styles.modalBtn,
+                      { backgroundColor: saving ? "#9E9E9E" : "#4CAF50" },
+                    ]}
                     onPress={handleGuardar}
                     disabled={saving}
+                    activeOpacity={0.9}
                   >
-                    <Text style={styles.buttonText}>
+                    <Text style={styles.modalBtnText}>
                       {editingTask ? "Guardar cambios" : "Guardar"}
                     </Text>
                   </TouchableOpacity>
                 </View>
+
+                <Text style={styles.modalHint}>
+                  Tip: si pones fecha, se crean recordatorios (mañana y 1 hora
+                  antes).
+                </Text>
               </View>
             </ScrollView>
           </KeyboardAvoidingView>
@@ -596,7 +1608,12 @@ const TareasScreen: React.FC = () => {
   );
 };
 
-// ===== Estilos (como tu FASE 2) =====
+export default TareasScreen;
+
+/* ======================================================
+   🎨 ESTILOS (BONITOS)
+====================================================== */
+
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "beige" },
 
@@ -609,12 +1626,13 @@ const styles = StyleSheet.create({
     alignItems: "center",
     elevation: 4,
   },
-  title: {
+  headerTitle: {
     fontSize: FONT_SIZES.large,
     fontWeight: "bold",
     color: "white",
   },
-  subtitle: {
+  headerSub: {
+    marginTop: 2,
     fontSize: FONT_SIZES.small,
     color: "#f5f5f5",
   },
@@ -650,8 +1668,8 @@ const styles = StyleSheet.create({
     marginHorizontal: 16,
     marginTop: 10,
     paddingHorizontal: 10,
-    paddingVertical: 8,
-    borderRadius: 10,
+    paddingVertical: 10,
+    borderRadius: 12,
     backgroundColor: "white",
     elevation: 2,
   },
@@ -661,18 +1679,22 @@ const styles = StyleSheet.create({
     fontSize: FONT_SIZES.medium,
     color: "#333",
   },
+  clearBtn: {
+    padding: 6,
+    borderRadius: 14,
+  },
 
-  filtersContainer: {
+  filtersRow: {
     flexDirection: "row",
     marginHorizontal: 16,
     marginTop: 10,
   },
   filterChip: {
     paddingHorizontal: 12,
-    paddingVertical: 6,
+    paddingVertical: 7,
     borderRadius: 20,
     borderWidth: 1,
-    borderColor: "#ccc",
+    borderColor: "#ddd",
     marginRight: 8,
     backgroundColor: "white",
   },
@@ -689,7 +1711,7 @@ const styles = StyleSheet.create({
     fontWeight: "bold",
   },
 
-  listContainer: {
+  listWrap: {
     flex: 1,
     marginHorizontal: 16,
     marginTop: 8,
@@ -698,15 +1720,12 @@ const styles = StyleSheet.create({
   taskCard: {
     flexDirection: "row",
     backgroundColor: "white",
-    borderRadius: 12,
+    borderRadius: 14,
     padding: 12,
     marginBottom: 10,
     elevation: 2,
   },
-  checkboxContainer: {
-    paddingRight: 8,
-    justifyContent: "center",
-  },
+  checkWrap: { paddingRight: 10, justifyContent: "center" },
   checkbox: {
     width: 22,
     height: 22,
@@ -716,45 +1735,47 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  checkboxChecked: {
-    backgroundColor: "red",
-  },
+  checkboxChecked: { backgroundColor: "red" },
+
   taskInfo: { flex: 1 },
+  taskTopRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+  },
   taskTitle: {
+    flex: 1,
     fontSize: FONT_SIZES.medium,
-    fontWeight: "600",
+    fontWeight: "700",
     color: "#333",
   },
   taskTitleCompleted: {
     textDecorationLine: "line-through",
-    color: "#999",
+    color: "#9E9E9E",
   },
-  taskDescription: {
-    marginTop: 2,
+  taskDesc: {
+    marginTop: 4,
     fontSize: FONT_SIZES.small,
     color: "#666",
   },
-  taskDescriptionCompleted: {
+  taskDescCompleted: {
     textDecorationLine: "line-through",
-    color: "#aaa",
+    color: "#B0B0B0",
   },
-  taskMetaRow: {
+
+  metaRow: {
     flexDirection: "row",
     alignItems: "center",
-    marginTop: 6,
+    marginTop: 8,
+    justifyContent: "space-between",
   },
-  metaItem: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginRight: 10,
-  },
-  metaText: {
-    fontSize: FONT_SIZES.small,
-    color: "#777",
-  },
+  metaItem: { flexDirection: "row", alignItems: "center" },
+  metaText: { fontSize: FONT_SIZES.small, color: "#777" },
+
   priorityBadge: {
     paddingHorizontal: 8,
-    paddingVertical: 2,
+    paddingVertical: 3,
     borderRadius: 10,
   },
   priorityText: {
@@ -763,12 +1784,23 @@ const styles = StyleSheet.create({
     fontWeight: "bold",
   },
 
-  taskActions: {
+  leftBadge: {
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+  },
+  leftText: {
+    fontSize: FONT_SIZES.small,
+    fontWeight: "700",
+  },
+
+  actionsCol: {
     justifyContent: "center",
     alignItems: "flex-end",
     marginLeft: 8,
   },
-  iconButton: { padding: 4 },
+  iconBtn: { padding: 6 },
 
   emptyState: {
     flex: 1,
@@ -779,10 +1811,10 @@ const styles = StyleSheet.create({
   emptyTitle: {
     marginTop: 10,
     fontSize: FONT_SIZES.medium,
-    fontWeight: "600",
+    fontWeight: "700",
     color: "#555",
   },
-  emptySubtitle: {
+  emptySub: {
     marginTop: 4,
     fontSize: FONT_SIZES.small,
     color: "#888",
@@ -802,75 +1834,85 @@ const styles = StyleSheet.create({
     elevation: 6,
   },
 
-  modalBackground: {
+  modalBg: {
     flex: 1,
-    backgroundColor: "rgba(0,0,0,0.5)",
-    padding: 20,
+    backgroundColor: "rgba(0,0,0,0.55)",
+    padding: 18,
   },
-  modalScrollContent: {
+  modalScroll: {
     flexGrow: 1,
     justifyContent: "center",
   },
-  modalContainer: {
+  modalCard: {
     backgroundColor: "white",
-    borderRadius: 12,
-    padding: 20,
+    borderRadius: 14,
+    padding: 18,
+    elevation: 6,
   },
   modalTitle: {
     fontSize: FONT_SIZES.large,
     fontWeight: "bold",
     textAlign: "center",
-    marginBottom: 16,
+    marginBottom: 12,
+    color: "#111",
   },
   label: {
     fontSize: FONT_SIZES.small,
     marginBottom: 6,
     fontWeight: "bold",
+    color: "#333",
   },
   input: {
     borderWidth: 1,
-    borderColor: "#BDBDBD",
-    borderRadius: 8,
-    padding: 10,
+    borderColor: "#DADADA",
+    borderRadius: 10,
+    padding: 12,
     marginBottom: 12,
     fontSize: FONT_SIZES.medium,
     backgroundColor: "white",
   },
+
   priorityRow: {
     flexDirection: "row",
-    marginBottom: 12,
+    marginBottom: 8,
   },
   priorityChip: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 20,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 18,
     borderWidth: 1,
-    borderColor: "#ccc",
+    borderColor: "#ddd",
     marginRight: 8,
     backgroundColor: "white",
   },
   priorityChipText: {
     fontSize: FONT_SIZES.small,
     color: "#555",
+    fontWeight: "700",
   },
 
-  modalButtonsRow: {
+  modalBtnsRow: {
     flexDirection: "row",
     justifyContent: "space-between",
-    marginTop: 8,
+    marginTop: 6,
   },
-  modalButton: {
+  modalBtn: {
     flex: 1,
     paddingVertical: 12,
-    borderRadius: 8,
+    borderRadius: 10,
     alignItems: "center",
     marginHorizontal: 4,
   },
-  buttonText: {
+  modalBtnText: {
     color: "white",
     fontSize: FONT_SIZES.medium,
     fontWeight: "bold",
   },
+  modalHint: {
+    marginTop: 12,
+    fontSize: FONT_SIZES.small,
+    color: "#777",
+    textAlign: "center",
+  },
 });
 
-export default TareasScreen;
