@@ -1,4 +1,6 @@
-import React, { useEffect, useState, useMemo } from "react";
+// src/screens/compras/ComprasScreen.tsx
+
+import React, { useEffect, useMemo, useState } from "react";
 import {
   View,
   Text,
@@ -31,9 +33,12 @@ import {
   loadCompras,
   saveCompras,
   type StoredCompra,
+  type ProductoCompra,
 } from "../../config/localStorageConfig";
 
+// ======================
 // Categorías
+// ======================
 const CATEGORIAS = [
   "Supermercado",
   "Comida",
@@ -44,11 +49,13 @@ const CATEGORIAS = [
   "Otros",
 ];
 
-const ComprasScreen = () => {
+const ComprasScreen: React.FC = () => {
   // =====================
-  //  AUTENTICACIÓN
+  // AUTENTICACIÓN
   // =====================
-  const [userId, setUserId] = useState(auth.currentUser?.uid ?? null);
+  const [userId, setUserId] = useState<string | null>(
+    auth.currentUser?.uid ?? null
+  );
 
   useEffect(() => {
     const unsub = auth.onAuthStateChanged((u) => setUserId(u?.uid ?? null));
@@ -56,25 +63,27 @@ const ComprasScreen = () => {
   }, []);
 
   // =====================
-  //  Estados
+  // ESTADOS PRINCIPALES
   // =====================
   const [compras, setCompras] = useState<StoredCompra[]>([]);
   const [modalVisible, setModalVisible] = useState(false);
 
-  const [editingCompra, setEditingCompra] = useState<StoredCompra | null>(null);
-
   const [categoria, setCategoria] = useState<string>(CATEGORIAS[0]);
-  const [descripcion, setDescripcion] = useState("");
-  const [cantidad, setCantidad] = useState("");
-  const [precio, setPrecio] = useState("");
 
+  // ---- carrito ----
+  const [productos, setProductos] = useState<ProductoCompra[]>([]);
+  const [prodDesc, setProdDesc] = useState("");
+  const [prodCant, setProdCant] = useState("");
+  const [prodPrecio, setProdPrecio] = useState("");
+
+  // ---- filtros ----
   const [filtroCategoria, setFiltroCategoria] = useState("Todas");
   const [busqueda, setBusqueda] = useState("");
 
   const [saving, setSaving] = useState(false);
 
   // ============================
-  // 1) CARGAR LOCAL STORAGE PRIMERO
+  // 1) CARGAR LOCAL PRIMERO
   // ============================
   useEffect(() => {
     (async () => {
@@ -84,7 +93,7 @@ const ComprasScreen = () => {
   }, [userId]);
 
   // ==================================
-  // 2) SNAPSHOT FIRESTORE (tiempo real)
+  // 2) SNAPSHOT FIRESTORE
   // ==================================
   useEffect(() => {
     if (!userId) return;
@@ -108,7 +117,6 @@ const ComprasScreen = () => {
           ...(d.data() as StoredCompra),
           id: d.id,
         }));
-
         setCompras(cloud);
         await saveCompras(userId, cloud);
       },
@@ -119,117 +127,104 @@ const ComprasScreen = () => {
   }, [userId]);
 
   // ======================
-  // Funciones auxiliares
+  // HELPERS
   // ======================
   const resetForm = () => {
     setCategoria(CATEGORIAS[0]);
-    setDescripcion("");
-    setCantidad("");
-    setPrecio("");
-    setEditingCompra(null);
+    setProductos([]);
+    setProdDesc("");
+    setProdCant("");
+    setProdPrecio("");
   };
 
   const persistLocal = async (next: StoredCompra[]) => {
     setCompras(next);
     await saveCompras(userId, next);
   };
-  // ======================
-  // Abrir modal
-  // ======================
-  const abrirModalNueva = () => {
-    resetForm();
-    setModalVisible(true);
-  };
-
-  const abrirModalEditar = (compra: StoredCompra) => {
-    setEditingCompra(compra);
-    setCategoria(compra.categoria);
-    setDescripcion(compra.descripcion);
-    setCantidad(String(compra.cantidad));
-    setPrecio(String(compra.precio));
-    setModalVisible(true);
-  };
 
   // ======================
-  // GUARDAR / EDITAR
+  // CARRITO
   // ======================
-  const handleGuardar = async () => {
-    if (saving) return;
-
-    if (!descripcion.trim() || !cantidad.trim() || !precio.trim()) {
-      return Alert.alert("Error", "Completa todos los campos.");
+  const agregarProducto = () => {
+    if (!prodDesc || !prodCant || !prodPrecio) {
+      Alert.alert("Error", "Completa el producto");
+      return;
     }
 
-    const cantNum = parseInt(cantidad, 10);
-    const precioNum = parseFloat(precio);
+    const cantidad = Number(prodCant);
+    const precio = Number(prodPrecio);
 
-    if (isNaN(cantNum) || isNaN(precioNum) || cantNum <= 0 || precioNum <= 0) {
-      return Alert.alert("Error", "Cantidad / precio inválidos.");
+    if (cantidad <= 0 || precio <= 0) {
+      Alert.alert("Error", "Cantidad o precio inválidos");
+      return;
+    }
+
+    const nuevo: ProductoCompra = {
+      id: Date.now().toString(),
+      descripcion: prodDesc.trim(),
+      cantidad,
+      precio,
+    };
+
+    setProductos((prev) => [...prev, nuevo]);
+    setProdDesc("");
+    setProdCant("");
+    setProdPrecio("");
+  };
+
+  const eliminarProducto = (id: string) => {
+    setProductos((prev) => prev.filter((p) => p.id !== id));
+  };
+
+  const totalCompra = useMemo(
+    () => productos.reduce((acc, p) => acc + p.cantidad * p.precio, 0),
+    [productos]
+  );
+
+  // ======================
+  // GUARDAR COMPRA
+  // ======================
+  const handleGuardarCompra = async () => {
+    if (saving) return;
+
+    if (productos.length === 0) {
+      Alert.alert("Error", "Agrega al menos un producto");
+      return;
     }
 
     setSaving(true);
 
     try {
-      if (editingCompra) {
-        // EDITAR
-        const updated: StoredCompra = {
-          ...editingCompra,
-          categoria,
-          descripcion: descripcion.trim(),
-          cantidad: cantNum,
-          precio: precioNum,
-        };
+      const nueva: StoredCompra = {
+        id: Date.now().toString(),
+        categoria,
+        productos,
+        total: totalCompra,
+        fecha: Date.now(),
+      };
 
-        const next = compras.map((c) =>
-          c.id === editingCompra.id ? updated : c
-        );
+      const next = [nueva, ...compras];
+      await persistLocal(next);
 
-        await persistLocal(next);
-
-        if (userId) {
-          setDoc(doc(db, "users", userId, "compras", updated.id), updated, {
-            merge: true,
-          }).catch(() => {});
-        }
-
-        Alert.alert("Compras", "Compra actualizada.");
-      } else {
-        // NUEVA
-        const nueva: StoredCompra = {
-          id: Date.now().toString(),
-          categoria,
-          descripcion: descripcion.trim(),
-          cantidad: cantNum,
-          precio: precioNum,
-        };
-
-        const next = [nueva, ...compras];
-        await persistLocal(next);
-
-        if (userId) {
-          setDoc(doc(db, "users", userId, "compras", nueva.id), nueva, {
-            merge: true,
-          }).catch(() => {});
-        }
-
-        Alert.alert("Compras", "Compra agregada.");
+      if (userId) {
+        setDoc(doc(db, "users", userId, "compras", nueva.id), nueva, {
+          merge: true,
+        }).catch(() => {});
       }
 
       setModalVisible(false);
       resetForm();
+      Alert.alert("Compras", "Compra guardada");
     } finally {
       setSaving(false);
     }
   };
 
   // ======================
-  // ELIMINAR
+  // ELIMINAR COMPRA
   // ======================
-  const handleEliminar = (id: string) => {
-    const compra = compras.find((c) => c.id === id);
-    if (!compra) return;
-
-    Alert.alert("Eliminar compra", `¿Eliminar "${compra.descripcion}"?`, [
+  const handleEliminarCompra = (id: string) => {
+    Alert.alert("Eliminar", "¿Eliminar esta compra?", [
       { text: "Cancelar", style: "cancel" },
       {
         text: "Eliminar",
@@ -237,7 +232,6 @@ const ComprasScreen = () => {
         onPress: async () => {
           const next = compras.filter((c) => c.id !== id);
           await persistLocal(next);
-
           if (userId) {
             deleteDoc(doc(db, "users", userId, "compras", id)).catch(() => {});
           }
@@ -247,150 +241,87 @@ const ComprasScreen = () => {
   };
 
   // ======================
-  // Filtros
+  // FILTROS
   // ======================
   const comprasFiltradas = useMemo(() => {
     return compras.filter((c) => {
-      const matchCategoria =
+      const matchCat =
         filtroCategoria === "Todas" || c.categoria === filtroCategoria;
-      const matchBusqueda = c.descripcion
-        .toLowerCase()
-        .includes(busqueda.toLowerCase());
-      return matchCategoria && matchBusqueda;
+      const matchBusqueda =
+        !busqueda ||
+        c.productos.some((p) =>
+          p.descripcion.toLowerCase().includes(busqueda.toLowerCase())
+        );
+      return matchCat && matchBusqueda;
     });
   }, [compras, filtroCategoria, busqueda]);
 
   const totalGastado = useMemo(
-    () => compras.reduce((acc, c) => acc + c.cantidad * c.precio, 0),
+    () => compras.reduce((acc, c) => acc + c.total, 0),
     [compras]
   );
 
   // ======================
-  // Render item
+  // RENDER
   // ======================
-  const renderCompra = ({ item }: { item: StoredCompra }) => {
-    const totalLinea = item.cantidad * item.precio;
+  const renderCompra = ({ item }: { item: StoredCompra }) => (
+    <View style={styles.compraCard}>
+      <View style={{ flex: 1 }}>
+        <Text style={styles.compraCategoria}>{item.categoria}</Text>
 
-    return (
-      <View style={styles.compraCard}>
-        <View style={styles.compraInfo}>
-          <Text style={styles.compraDescripcion}>{item.descripcion}</Text>
-          <Text style={styles.compraCategoria}>{item.categoria}</Text>
-          <Text style={styles.compraDetalle}>
-            Cant: {item.cantidad} · ${item.precio.toFixed(2)}
+        {item.productos.map((p) => (
+          <Text key={p.id} style={styles.compraDetalle}>
+            • {p.descripcion} ({p.cantidad} × ${p.precio})
           </Text>
-          <Text style={styles.compraTotal}>
-            Total: ${totalLinea.toFixed(2)}
-          </Text>
-        </View>
+        ))}
 
-        <View style={styles.compraActions}>
-          <TouchableOpacity
-            style={styles.iconButton}
-            onPress={() => abrirModalEditar(item)}
-          >
-            <MaterialIcons name="edit" size={22} color="#FF9800" />
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={styles.iconButton}
-            onPress={() => handleEliminar(item.id)}
-          >
-            <MaterialIcons name="delete" size={22} color="#F44336" />
-          </TouchableOpacity>
-        </View>
+        <Text style={styles.compraTotal}>Total: ${item.total.toFixed(2)}</Text>
       </View>
-    );
-  };
+
+      <TouchableOpacity onPress={() => handleEliminarCompra(item.id)}>
+        <MaterialIcons name="delete" size={22} color="#F44336" />
+      </TouchableOpacity>
+    </View>
+  );
+
+  // ======================
+  // UI
+  // ======================
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar backgroundColor="red" barStyle="light-content" />
 
-      {/* HEADER */}
       <View style={styles.header}>
-        <View>
-          <Text style={styles.title}>Gestión de Compras</Text>
-          <Text style={styles.subTitle}>Control de gastos</Text>
-        </View>
-        <FontAwesome5 name="shopping-bag" size={30} color="white" />
+        <Text style={styles.title}>Compras</Text>
+        <FontAwesome5 name="shopping-cart" size={24} color="white" />
       </View>
 
-      {/* RESUMEN */}
       <View style={styles.summaryContainer}>
         <Text style={styles.summaryLabel}>Total gastado</Text>
         <Text style={styles.summaryAmount}>${totalGastado.toFixed(2)}</Text>
       </View>
 
-      {/* BUSCADOR */}
       <View style={styles.searchContainer}>
-        <MaterialIcons name="search" size={22} color="#777" />
+        <MaterialIcons name="search" size={20} color="#777" />
         <TextInput
           style={styles.searchInput}
-          placeholder="Buscar..."
+          placeholder="Buscar producto..."
           value={busqueda}
           onChangeText={setBusqueda}
         />
       </View>
 
-      {/* FILTROS */}
-      <View style={styles.filtersContainer}>
-        <TouchableOpacity
-          style={[
-            styles.filterChip,
-            filtroCategoria === "Todas" && styles.filterChipActive,
-          ]}
-          onPress={() => setFiltroCategoria("Todas")}
-        >
-          <Text
-            style={[
-              styles.filterChipText,
-              filtroCategoria === "Todas" && styles.filterChipTextActive,
-            ]}
-          >
-            Todas
-          </Text>
-        </TouchableOpacity>
+      <FlatList
+        data={comprasFiltradas}
+        keyExtractor={(item) => item.id}
+        renderItem={renderCompra}
+        contentContainerStyle={{ padding: 16, paddingBottom: 120 }}
+      />
 
-        {CATEGORIAS.map((cat) => (
-          <TouchableOpacity
-            key={cat}
-            style={[
-              styles.filterChip,
-              filtroCategoria === cat && styles.filterChipActive,
-            ]}
-            onPress={() => setFiltroCategoria(cat)}
-          >
-            <Text
-              style={[
-                styles.filterChipText,
-                filtroCategoria === cat && styles.filterChipTextActive,
-              ]}
-            >
-              {cat}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </View>
-
-      {/* LISTA */}
-      <View style={styles.listContainer}>
-        {comprasFiltradas.length === 0 ? (
-          <View style={styles.emptyState}>
-            <FontAwesome5 name="list-alt" size={40} color="#ccc" />
-            <Text style={styles.emptyTitle}>Sin compras registradas</Text>
-          </View>
-        ) : (
-          <FlatList
-            data={comprasFiltradas}
-            keyExtractor={(item) => item.id}
-            renderItem={renderCompra}
-            contentContainerStyle={{ paddingBottom: 100 }}
-          />
-        )}
-      </View>
-
-      {/* FAB */}
-      <TouchableOpacity style={styles.fab} onPress={abrirModalNueva}>
+      <TouchableOpacity
+        style={styles.fab}
+        onPress={() => setModalVisible(true)}
+      >
         <MaterialIcons name="add" size={30} color="white" />
       </TouchableOpacity>
 
@@ -398,81 +329,101 @@ const ComprasScreen = () => {
       <Modal visible={modalVisible} transparent animationType="slide">
         <View style={styles.modalBackground}>
           <KeyboardAvoidingView
-            style={{ flex: 1 }}
             behavior={Platform.OS === "ios" ? "padding" : undefined}
           >
-            <ScrollView contentContainerStyle={styles.modalScrollContent}>
-              <View style={styles.modalContainer}>
-                <Text style={styles.modalTitle}>
-                  {editingCompra ? "Editar compra" : "Registrar compra"}
-                </Text>
+            <ScrollView contentContainerStyle={styles.modalContainer}>
+              <Text style={styles.modalTitle}>Nueva compra</Text>
 
-                <Text style={styles.label}>Categoría</Text>
-                <View style={styles.pickerContainer}>
-                  {CATEGORIAS.map((cat) => (
-                    <TouchableOpacity
-                      key={cat}
+              <Text style={styles.label}>Categoría</Text>
+              <View style={styles.pickerContainer}>
+                {CATEGORIAS.map((cat) => (
+                  <TouchableOpacity
+                    key={cat}
+                    style={[
+                      styles.pickerOption,
+                      categoria === cat && styles.pickerOptionActive,
+                    ]}
+                    onPress={() => setCategoria(cat)}
+                  >
+                    <Text
                       style={[
-                        styles.pickerOption,
-                        categoria === cat && styles.pickerOptionActive,
+                        styles.pickerOptionText,
+                        categoria === cat && styles.pickerOptionTextActive,
                       ]}
-                      onPress={() => setCategoria(cat)}
                     >
-                      <Text
-                        style={[
-                          styles.pickerOptionText,
-                          categoria === cat && styles.pickerOptionTextActive,
-                        ]}
-                      >
-                        {cat}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-
-                <Text style={styles.label}>Descripción</Text>
-                <TextInput
-                  style={styles.input}
-                  value={descripcion}
-                  onChangeText={setDescripcion}
-                />
-
-                <Text style={styles.label}>Cantidad</Text>
-                <TextInput
-                  style={styles.input}
-                  value={cantidad}
-                  onChangeText={setCantidad}
-                  keyboardType="numeric"
-                />
-
-                <Text style={styles.label}>Precio</Text>
-                <TextInput
-                  style={styles.input}
-                  value={precio}
-                  onChangeText={setPrecio}
-                  keyboardType="numeric"
-                />
-
-                <View style={styles.modalButtonsRow}>
-                  <TouchableOpacity
-                    style={[styles.modalButton, { backgroundColor: "#F44336" }]}
-                    onPress={() => {
-                      setModalVisible(false);
-                      resetForm();
-                    }}
-                  >
-                    <Text style={styles.buttonText}>Cancelar</Text>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity
-                    style={[styles.modalButton, { backgroundColor: "#4CAF50" }]}
-                    onPress={handleGuardar}
-                  >
-                    <Text style={styles.buttonText}>
-                      {editingCompra ? "Guardar" : "Registrar"}
+                      {cat}
                     </Text>
                   </TouchableOpacity>
+                ))}
+              </View>
+
+              <Text style={styles.label}>Producto</Text>
+
+              <TextInput
+                style={styles.input}
+                placeholder="Descripción"
+                placeholderTextColor="#999"
+                value={prodDesc}
+                onChangeText={setProdDesc}
+              />
+
+              <TextInput
+                style={styles.input}
+                placeholder="Cantidad"
+                placeholderTextColor="#999"
+                keyboardType="numeric"
+                value={prodCant}
+                onChangeText={setProdCant}
+              />
+
+              <TextInput
+                style={styles.input}
+                placeholder="Precio"
+                placeholderTextColor="#999"
+                keyboardType="numeric"
+                value={prodPrecio}
+                onChangeText={setProdPrecio}
+              />
+
+              <TouchableOpacity
+                style={styles.addProductBtn}
+                onPress={agregarProducto}
+              >
+                <Text style={styles.buttonText}>+ Agregar producto</Text>
+              </TouchableOpacity>
+
+              {productos.map((p) => (
+                <View key={p.id} style={styles.productoRow}>
+                  <Text>
+                    {p.descripcion} — ${(p.cantidad * p.precio).toFixed(2)}
+                  </Text>
+                  <TouchableOpacity onPress={() => eliminarProducto(p.id)}>
+                    <MaterialIcons name="close" size={18} color="#F44336" />
+                  </TouchableOpacity>
                 </View>
+              ))}
+
+              <Text style={styles.totalText}>
+                Total: ${totalCompra.toFixed(2)}
+              </Text>
+
+              <View style={styles.modalButtonsRow}>
+                <TouchableOpacity
+                  style={[styles.modalButton, { backgroundColor: "#F44336" }]}
+                  onPress={() => {
+                    setModalVisible(false);
+                    resetForm();
+                  }}
+                >
+                  <Text style={styles.buttonText}>Cancelar</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[styles.modalButton, { backgroundColor: "#4CAF50" }]}
+                  onPress={handleGuardarCompra}
+                >
+                  <Text style={styles.buttonText}>Guardar</Text>
+                </TouchableOpacity>
               </View>
             </ScrollView>
           </KeyboardAvoidingView>
@@ -484,102 +435,58 @@ const ComprasScreen = () => {
 
 export default ComprasScreen;
 
-// =========================
-// ESTILOS (los mismos que ya tenías)
-// =========================
+// ======================
+// ESTILOS
+// ======================
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "beige" },
 
   header: {
     backgroundColor: "red",
-    paddingHorizontal: 16,
-    paddingVertical: 14,
+    padding: 16,
     flexDirection: "row",
     justifyContent: "space-between",
-    alignItems: "center",
-    elevation: 4,
   },
-  title: { fontSize: 22, fontWeight: "bold", color: "white" },
-  subTitle: { fontSize: 14, color: "#f5f5f5" },
+  title: { color: "white", fontSize: 20, fontWeight: "bold" },
 
   summaryContainer: {
-    marginTop: 12,
-    marginHorizontal: 16,
-    padding: 14,
-    borderRadius: 14,
+    margin: 16,
     backgroundColor: "white",
-    elevation: 3,
+    padding: 16,
+    borderRadius: 12,
   },
   summaryLabel: { color: "#777" },
   summaryAmount: {
-    marginTop: 4,
-    fontSize: 28,
+    fontSize: 26,
     fontWeight: "bold",
     color: "red",
   },
 
   searchContainer: {
     flexDirection: "row",
-    alignItems: "center",
     marginHorizontal: 16,
-    marginTop: 12,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
+    backgroundColor: "white",
+    padding: 10,
     borderRadius: 10,
-    backgroundColor: "white",
-    elevation: 2,
+    alignItems: "center",
   },
-  searchInput: { flex: 1, marginLeft: 8, fontSize: 16, color: "#333" },
-
-  filtersContainer: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    marginHorizontal: 16,
-    marginTop: 10,
-  },
-  filterChip: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: "#ccc",
-    marginRight: 8,
-    marginBottom: 8,
-    backgroundColor: "white",
-  },
-  filterChipActive: { backgroundColor: "red", borderColor: "red" },
-  filterChipText: { color: "#555" },
-  filterChipTextActive: { color: "white", fontWeight: "bold" },
-
-  listContainer: { flex: 1, marginTop: 8, marginHorizontal: 16 },
+  searchInput: { marginLeft: 8, flex: 1 },
 
   compraCard: {
-    flexDirection: "row",
-    padding: 12,
-    borderRadius: 12,
     backgroundColor: "white",
+    borderRadius: 12,
+    padding: 12,
     marginBottom: 10,
-    elevation: 2,
+    flexDirection: "row",
+    justifyContent: "space-between",
   },
-  compraInfo: { flex: 1 },
-  compraDescripcion: { fontSize: 16, fontWeight: "600", color: "#333" },
-  compraCategoria: { fontSize: 13, color: "#888", marginTop: 2 },
-  compraDetalle: { color: "#555", marginTop: 4 },
-  compraTotal: { color: "red", fontWeight: "bold", marginTop: 4 },
-
-  compraActions: {
-    justifyContent: "center",
-    alignItems: "flex-end",
-    marginLeft: 8,
+  compraCategoria: { fontWeight: "bold" },
+  compraDetalle: { color: "#555", marginTop: 2 },
+  compraTotal: {
+    marginTop: 6,
+    fontWeight: "bold",
+    color: "red",
   },
-  iconButton: { padding: 4 },
-
-  emptyState: {
-    flex: 1,
-    alignItems: "center",
-    paddingTop: 40,
-  },
-  emptyTitle: { marginTop: 10, fontSize: 16, color: "#555" },
 
   fab: {
     position: "absolute",
@@ -591,56 +498,79 @@ const styles = StyleSheet.create({
     backgroundColor: "red",
     alignItems: "center",
     justifyContent: "center",
-    elevation: 6,
   },
 
   modalBackground: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.5)",
-    padding: 20,
+    justifyContent: "center",
   },
-  modalScrollContent: { flexGrow: 1, justifyContent: "center" },
   modalContainer: {
     backgroundColor: "white",
+    margin: 20,
     borderRadius: 12,
     padding: 20,
   },
   modalTitle: { fontSize: 20, fontWeight: "bold", textAlign: "center" },
 
-  label: { fontWeight: "bold", marginTop: 10 },
+  label: { marginTop: 10, fontWeight: "bold" },
   input: {
     borderWidth: 1,
-    borderColor: "#BDBDBD",
+    borderColor: "#ccc",
     borderRadius: 8,
-    padding: 10,
-    marginTop: 4,
+    padding: 8,
+    marginTop: 6,
+    color: "#000",
   },
 
   pickerContainer: { flexDirection: "row", flexWrap: "wrap", marginTop: 6 },
   pickerOption: {
     borderWidth: 1,
+    borderColor: "#ccc",
+    padding: 6,
     borderRadius: 8,
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    marginRight: 8,
-    marginBottom: 8,
-    borderColor: "#BDBDBD",
+    marginRight: 6,
+    marginBottom: 6,
   },
-  pickerOptionActive: { backgroundColor: "red", borderColor: "red" },
+  pickerOptionActive: {
+    backgroundColor: "red",
+    borderColor: "red",
+  },
   pickerOptionText: { color: "#333" },
-  pickerOptionTextActive: { color: "white", fontWeight: "bold" },
+  pickerOptionTextActive: { color: "white" },
+
+  addProductBtn: {
+    marginTop: 10,
+    backgroundColor: "#2196F3",
+    padding: 10,
+    borderRadius: 8,
+    alignItems: "center",
+  },
+
+  productoRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginTop: 6,
+  },
+
+  totalText: {
+    marginTop: 10,
+    fontSize: 18,
+    fontWeight: "bold",
+    color: "red",
+    textAlign: "right",
+  },
 
   modalButtonsRow: {
     flexDirection: "row",
-    justifyContent: "space-between",
-    marginTop: 18,
+    marginTop: 20,
   },
   modalButton: {
     flex: 1,
-    paddingVertical: 12,
+    marginHorizontal: 5,
+    padding: 12,
     borderRadius: 8,
     alignItems: "center",
-    marginHorizontal: 5,
   },
   buttonText: { color: "white", fontWeight: "bold" },
 });

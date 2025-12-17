@@ -336,7 +336,7 @@ export default function MedicamentosScreen() {
           </View>
 
           <View style={styles.row}>
-            <Text style={styles.label}>Cantidad:</Text>
+            <Text style={styles.label}>Cantidad (Stock):</Text>
             <TextInput
               style={styles.input}
               value={cantidad}
@@ -346,7 +346,7 @@ export default function MedicamentosScreen() {
           </View>
 
           <View style={styles.row}>
-            <Text style={styles.label}>Umbral:</Text>
+            <Text style={styles.label}>Umbral (Avisar):</Text>
             <TextInput
               style={styles.input}
               value={umbral}

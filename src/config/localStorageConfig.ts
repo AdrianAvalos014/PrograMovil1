@@ -87,20 +87,29 @@ export async function saveTasks(
 }
 
 /* ======================================================
-   COMPRAS
+   COMPRAS — MODELO CON CARRITO 🛒
 ====================================================== */
 
-export interface StoredCompra {
+export interface ProductoCompra {
   id: string;
-  categoria: string;
   descripcion: string;
   cantidad: number;
   precio: number;
 }
 
+export interface StoredCompra {
+  id: string;
+  categoria: string;
+  productos: ProductoCompra[];
+  total: number;
+  fecha: number;
+}
+
 const COMPRAS_KEY = "@tasklife/compras";
 
-export const loadCompras = async (userId: string | null) => {
+export const loadCompras = async (
+  userId: string | null
+): Promise<StoredCompra[]> => {
   try {
     if (!userId) return [];
     const raw = await AsyncStorage.getItem(`${COMPRAS_KEY}_${userId}`);
@@ -114,7 +123,7 @@ export const loadCompras = async (userId: string | null) => {
 export const saveCompras = async (
   userId: string | null,
   compras: StoredCompra[]
-) => {
+): Promise<void> => {
   try {
     if (!userId) return;
     await AsyncStorage.setItem(
@@ -125,6 +134,7 @@ export const saveCompras = async (
     console.log("Error saving compras:", e);
   }
 };
+
 
 /* ======================================================
    EVENTOS

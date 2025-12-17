@@ -90,9 +90,18 @@ function getEventoDate(e: StoredEvento): Date | null {
   return date;
 }
 
-// COMPRAS: fecha desde id
+/* =======================================================
+   ✅ COMPRAS (AJUSTADO A TU MODELO NUEVO)
+   StoredCompra: { id, categoria, productos[], total, fecha }
+   ======================================================= */
+
+// COMPRAS: fecha desde c.fecha (fallback a id)
 function compraFecha(c: StoredCompra): Date {
-  const ts = Number(c.id);
+  const ts =
+    typeof c?.fecha === "number" && Number.isFinite(c.fecha)
+      ? c.fecha
+      : Number(c?.id);
+
   return Number.isFinite(ts) ? new Date(ts) : new Date(0);
 }
 
@@ -102,6 +111,21 @@ function compraFechaISO(c: StoredCompra): string {
     2,
     "0"
   )}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+// Total de compra: usa c.total si es válido; si no, recalcula con productos
+function compraTotal(c: StoredCompra): number {
+  if (typeof c?.total === "number" && Number.isFinite(c.total)) return c.total;
+
+  const productos = Array.isArray(c?.productos) ? c.productos : [];
+  return productos.reduce((acc, p) => {
+    const cant =
+      typeof p?.cantidad === "number" ? p.cantidad : Number(p?.cantidad);
+    const price = typeof p?.precio === "number" ? p.precio : Number(p?.precio);
+    const cCant = Number.isFinite(cant) ? cant : 0;
+    const cPrice = Number.isFinite(price) ? price : 0;
+    return acc + cCant * cPrice;
+  }, 0);
 }
 
 // Comparación por mes
@@ -243,14 +267,14 @@ const ReportesScreen: React.FC = () => {
 
   const totalEventos = eventosMes.length;
 
-  const totalGasto = comprasMes.reduce(
-    (acc, c) => acc + c.cantidad * c.precio,
-    0
-  );
+  // ✅ TOTAL GASTO (usa compraTotal)
+  const totalGasto = comprasMes.reduce((acc, c) => acc + compraTotal(c), 0);
+
+  // ✅ GASTO POR CATEGORÍA (usa compraTotal)
   const gastoPorCategoria = comprasMes.reduce<Record<string, number>>(
     (acc, c) => {
-      const totalLinea = c.cantidad * c.precio;
-      acc[c.categoria] = (acc[c.categoria] || 0) + totalLinea;
+      const totalCompra = compraTotal(c);
+      acc[c.categoria] = (acc[c.categoria] || 0) + totalCompra;
       return acc;
     },
     {}
@@ -301,6 +325,7 @@ const ReportesScreen: React.FC = () => {
     return base;
   }, [eventosMes, eventosOrden]);
 
+  // ✅ COMPRAS DETALLE (filtros + orden usando compraTotal y compraFecha)
   const comprasDetalle = useMemo(() => {
     let base = [...comprasMes];
 
@@ -309,14 +334,14 @@ const ReportesScreen: React.FC = () => {
     }
     if (!base.length) return [];
 
-    const totales = base.map((c) => c.cantidad * c.precio);
+    const totales = base.map((c) => compraTotal(c));
     const max = Math.max(...totales);
     const min = Math.min(...totales);
 
     if (comprasFiltroMonto === "Cara")
-      base = base.filter((c) => c.cantidad * c.precio === max);
+      base = base.filter((c) => compraTotal(c) === max);
     else if (comprasFiltroMonto === "Barata")
-      base = base.filter((c) => c.cantidad * c.precio === min);
+      base = base.filter((c) => compraTotal(c) === min);
 
     base.sort((a, b) =>
       comprasOrden === "fechaAsc"
@@ -483,7 +508,6 @@ const ReportesScreen: React.FC = () => {
           </TouchableOpacity>
         </View>
       </ScrollView>
-
       {/* =================== MODALES =================== */}
 
       <Modal
@@ -737,25 +761,65 @@ const ReportesScreen: React.FC = () => {
                         </Text>
                       ) : (
                         comprasDetalle.map((c) => {
-                          const totalLinea = c.cantidad * c.precio;
+                          const totalCompra = compraTotal(c);
+                          const productos = Array.isArray(c?.productos)
+                            ? c.productos
+                            : [];
+
                           return (
                             <View key={c.id} style={styles.modalItem}>
+                              {/* Título de la compra */}
                               <Text style={styles.modalItemTitle}>
-                                {c.descripcion}
+                                {c.categoria || "Compra"}
                               </Text>
+
+                              {/* Fecha */}
                               <Text style={styles.modalItemText}>
                                 Fecha: {compraFechaISO(c)}
                               </Text>
-                              <Text style={styles.modalItemText}>
-                                Cat: {c.categoria} · Cant: {c.cantidad} · $
-                                {c.precio.toFixed(2)}
-                              </Text>
+
+                              {/* Total */}
                               <Text style={styles.modalItemText}>
                                 Total:{" "}
                                 <Text style={styles.boldText}>
-                                  ${totalLinea.toFixed(2)}
+                                  ${Number(totalCompra).toFixed(2)}
                                 </Text>
                               </Text>
+
+                              {/* Productos */}
+                              {productos.length === 0 ? (
+                                <Text style={styles.modalItemText}>
+                                  (Sin productos)
+                                </Text>
+                              ) : (
+                                productos.map((p) => {
+                                  const cant =
+                                    typeof p?.cantidad === "number"
+                                      ? p.cantidad
+                                      : Number(p?.cantidad);
+                                  const price =
+                                    typeof p?.precio === "number"
+                                      ? p.precio
+                                      : Number(p?.precio);
+
+                                  const cCant = Number.isFinite(cant)
+                                    ? cant
+                                    : 0;
+                                  const cPrice = Number.isFinite(price)
+                                    ? price
+                                    : 0;
+
+                                  return (
+                                    <Text
+                                      key={p.id}
+                                      style={styles.modalItemText}
+                                    >
+                                      • {p.descripcion} · Cant: {cCant} · $
+                                      {cPrice.toFixed(2)}
+                                    </Text>
+                                  );
+                                })
+                              )}
                             </View>
                           );
                         })
@@ -765,13 +829,13 @@ const ReportesScreen: React.FC = () => {
                     <Text style={[styles.modalItemText, { marginTop: 8 }]}>
                       Total gastado:{" "}
                       <Text style={styles.boldText}>
-                        ${totalGasto.toFixed(2)}
+                        ${Number(totalGasto).toFixed(2)}
                       </Text>
                     </Text>
 
                     {Object.entries(gastoPorCategoria).map(([cat, val]) => (
                       <Text key={cat} style={styles.modalItemText}>
-                        • {cat}: ${val.toFixed(2)}
+                        • {cat}: ${Number(val).toFixed(2)}
                       </Text>
                     ))}
                   </>
@@ -791,7 +855,6 @@ const ReportesScreen: React.FC = () => {
     </SafeAreaView>
   );
 };
-
 /* ============================ ESTILOS ============================ */
 
 const styles = StyleSheet.create({
